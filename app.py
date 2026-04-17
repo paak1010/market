@@ -6,12 +6,12 @@ import io
 st.set_page_config(page_title="Tesco 납품 데이터 자동화", layout="wide")
 
 st.title("📦 Tesco 발주 데이터 자동 변환기")
-st.warning("⚠️ 주의: 화면의 표를 마우스로 드래그해서 복사하면 글자가 뭉개집니다! 반드시 맨 아래의 **[엑셀 다운로드]** 버튼을 눌러주세요.")
+st.error("🚨 경고: 웹 화면의 표를 마우스로 드래그해서 복사하면 엑셀 칸이 다 깨집니다! 반드시 맨 아래의 **[다운로드 버튼]**을 눌러서 엑셀 파일을 받으세요.")
 
 # ==========================================
-# 1. 마스터 데이터 (상품 및 발주처 상세 매핑)
+# 1. 마스터 데이터 세팅
 # ==========================================
-PRODUCT_MAP = {
+FULL_PRODUCT_MAP = {
     8809020342310: 'ME90521CLA', 8809020342211: 'ME90521CLL', 8809020342419: 'ME90521CLS',
     8809020340804: 'ME90521MC1', 8809020340774: 'ME90521LP2', 8809020348992: 'ME90521E18',
     8809020340279: 'ME90521LR1', 8809020344444: 'ME90521EL9', 8809020344451: 'ME90521EL8',
@@ -47,15 +47,15 @@ STORE_DETAIL_MAP = {
 }
 
 # ==========================================
-# 2. 메인 화면: 원본 데이터 업로드
+# 2. 메인 로직
 # ==========================================
 raw_file = st.file_uploader("발주 원본 파일 하나만 올려주세요.", type=['xlsx', 'xls', 'csv'])
 
 if raw_file:
     try:
-        with st.spinner("데이터를 처리 중입니다..."):
+        with st.spinner("서식파일 엑셀을 생성 중입니다..."):
             
-            # --- [Step 1] 데이터 로드 및 헤더 인식 ---
+            # --- 데이터 로드 (헤더 자동 찾기) ---
             if raw_file.name.endswith('.csv'):
                 temp_df = pd.read_csv(raw_file, header=None, encoding='utf-8-sig', errors='ignore')
                 raw_file.seek(0)
@@ -76,73 +76,77 @@ if raw_file:
 
             df_raw = df_raw.loc[:, ~df_raw.columns.duplicated()]
             
-            # [규칙 1] HYPER_FLOW -> FLOW 변환
+            # HYPER_FLOW 보정
             if '입고타입' in df_raw.columns:
                 df_raw['입고타입'] = df_raw['입고타입'].astype(str).str.replace('HYPER_FLOW', 'FLOW')
 
-            # --- [Step 2] VLOOKUP 매핑 로직 ---
+            # VLOOKUP 배송처 매핑
             def get_store_info(row):
                 store_str = str(row.get('납품처', '')).strip()
                 type_str = str(row.get('입고타입', '')).strip()
                 key = (store_str + type_str).replace(" ", "")
-                default = {'EDI': 133, '발주코드': 81020000, '배송코드': 81040913}
-                return STORE_DETAIL_MAP.get(key, default)
+                return STORE_DETAIL_MAP.get(key, {'EDI': 133, '발주코드': 81020000, '배송코드': 81040913})
 
             store_info = df_raw.apply(get_store_info, axis=1, result_type='expand')
             df_raw = pd.concat([df_raw, store_info], axis=1)
 
-            # --- [Step 3] 상품코드 변환 ---
+            # 상품코드 매핑
             if '상품코드' in df_raw.columns:
                 바코드_숫자 = pd.to_numeric(df_raw['상품코드'], errors='coerce')
                 df_raw = df_raw.drop(columns=['상품코드'])
-                df_raw['상품코드'] = 바코드_숫자.map(PRODUCT_MAP)
+                df_raw['상품코드'] = 바코드_숫자.map(FULL_PRODUCT_MAP)
             else:
                 df_raw['상품코드'] = np.nan
 
-            # --- [Step 4] 데이터 정제 및 그룹핑 ---
+            # 정제 및 합산
             df_result = df_raw.rename(columns={'낱개수량': '수량', '낱개당 단가': 'UNIT단가', '발주금액': 'Amount'})
             df_result['수량'] = pd.to_numeric(df_result['수량'], errors='coerce').fillna(0)
             df_result = df_result[df_result['수량'] > 0]
 
-            # 배송코드와 상품코드가 모두 동일한 경우 합산
             groupby_cols = ['EDI', '발주코드', '배송코드', '상품코드', '상품명', 'UNIT단가']
             df_grouped = df_result.groupby(groupby_cols, as_index=False).agg({'수량': 'sum', 'Amount': 'sum'})
             df_grouped = df_grouped.sort_values(by=['배송코드', '상품코드']).reset_index(drop=True)
 
-            # --- [Step 5] 서식파일 12열 양식 구성 ---
+            # --- 서식파일 구조 완벽 복제 ---
             df_final = pd.DataFrame()
             df_final['발주처코드(EDI)'] = df_grouped['EDI']
             df_final['배송코드(EDI)'] = np.nan
-            df_final['상품코드'] = np.nan
+            df_final['상품코드_빈칸'] = np.nan
             df_final['Sum Code'] = np.nan
             df_final['발주코드'] = df_grouped['발주코드']
             df_final['배송코드'] = df_grouped['배송코드'].astype(int)
-            df_final['상품코드_리얼'] = df_grouped['상품코드']  # 임시 이름
+            df_final['상품코드'] = df_grouped['상품코드']
             df_final['상품명'] = df_grouped['상품명']
             df_final['UNIT수량'] = df_grouped['수량'].astype(int)
             df_final['UNIT단가'] = df_grouped['UNIT단가'].astype(int)
             df_final['금       액'] = df_grouped['Amount'].astype(int)
             df_final['부  가   세'] = (df_final['금       액'] * 0.1).astype(int)
 
-            # ★ [중요] 사진과 완벽히 똑같이 열 이름 맞추기 (상품코드 중복 허용) ★
+            # 띄어쓰기까지 완벽히 똑같은 헤더 이름 적용
             df_final.columns = [
                 '발주처코드(EDI)', '배송코드(EDI)', '상품코드', 'Sum Code', 
                 '발주코드', '배송코드', '상품코드', '상품명', 
                 'UNIT수량', 'UNIT단가', '금       액', '부  가   세'
             ]
 
-            st.success("✅ 처리가 완료되었습니다! **꼭 아래 버튼을 눌러 엑셀 파일을 다운로드하세요.**")
-            
-            # 행 번호(Index) 숨겨서 깔끔하게 보여주기
-            st.dataframe(df_final, hide_index=True)
+            # 웹 화면 출력 (참고용 - 복사 금지!)
+            st.success("✅ 파일 처리가 완료되었습니다. **아래 버튼을 눌러 엑셀을 다운로드하세요!**")
+            st.dataframe(df_final)
 
-            # --- [Step 6] 엑셀 다운로드 ---
+            # ==========================================
+            # ★ 핵심: 서식파일 엑셀 만들기 (1번 줄 안내문구 포함) ★
+            # ==========================================
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_final.to_excel(writer, index=False, sheet_name='서식파일')
-            
+                # 2번째 줄(startrow=1)부터 데이터 기록
+                df_final.to_excel(writer, index=False, sheet_name='서식파일', startrow=1)
+                
+                # 엑셀의 1번 줄(H1 셀)에 원본 서식파일의 문구 작성
+                worksheet = writer.sheets['서식파일']
+                worksheet['H1'] = '입고되면 해당 코드로 발주 진행 Info 201117'
+
             st.download_button(
-                label="📥 최종 수주 파일 다운로드 (Excel)", 
+                label="📥 [클릭] 완벽한 서식파일 양식 다운로드 (Excel)", 
                 data=output.getvalue(), 
                 file_name="Tesco_최종업로드양식.xlsx", 
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
