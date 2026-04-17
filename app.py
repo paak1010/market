@@ -8,7 +8,7 @@ from datetime import date
 
 st.set_page_config(page_title="Tesco 납품 데이터 자동화", layout="wide")
 
-st.title("📦 Tesco 발주 데이터 자동 변환기 (날짜 추가본)")
+st.title("📦 Tesco 발주 데이터 자동 변환기 (날짜 완벽 추가본)")
 st.write("Tesco 주문서(CSV/Excel)를 업로드하면 수주일자와 납품일자를 자동으로 포함합니다.")
 
 # ==========================================
@@ -175,15 +175,16 @@ if raw_file:
             df_grouped = df.groupby(groupby_cols, as_index=False).agg({'수량': 'sum', '금액': 'sum'})
             df_grouped = df_grouped.sort_values(by=['납품일자', '배송코드', '상품코드']).reset_index(drop=True)
 
-            # --- 5. 최종 열 생성 및 날짜 형식 강제 지정 (YYYY-MM-DD) ---
+            # --- 5. 최종 열 생성 (문제가 해결된 부분!) ---
             df_final = pd.DataFrame()
             
-            # 수주일자: 오늘 날짜를 YYYY-MM-DD로
-            df_final['수주일자'] = date.today().strftime('%Y-%m-%d')
-            
-            # 납품일자: pandas datetime 객체로 변환한 후 dt.strftime()을 이용해 완벽한 YYYY-MM-DD 문자로 변환
+            # [수정포인트 1] 데이터가 꽉 찬 열을 가장 먼저 넣어서 전체 행(줄) 갯수를 확보합니다.
             df_final['납품일자'] = pd.to_datetime(df_grouped['납품일자'], errors='coerce').dt.strftime('%Y-%m-%d')
             
+            # [수정포인트 2] 이제 전체 행 갯수가 확정되었으니, 단일 값(수주일자)을 넣으면 모든 행에 에러 없이 똑같이 복사됩니다!
+            df_final['수주일자'] = date.today().strftime('%Y-%m-%d')
+            
+            # 나머지 데이터들도 순서대로 넣습니다.
             df_final['발주코드'] = df_grouped['발주코드'].astype(int)
             df_final['배송코드'] = df_grouped['배송코드'].astype(int)
             df_final['상품코드'] = df_grouped['상품코드']
@@ -191,6 +192,9 @@ if raw_file:
             df_final['수량'] = df_grouped['수량'].astype(int)
             df_final['단가'] = df_grouped['단가'].astype(int)
             df_final['금액(Amount)'] = df_grouped['금액'].astype(int)
+
+            # [수정포인트 3] 마지막으로 열 순서를 가장 보기 편하게(날짜들이 맨 앞으로 오도록) 정렬합니다.
+            df_final = df_final[['수주일자', '납품일자', '발주코드', '배송코드', '상품코드', '상품명', '수량', '단가', '금액(Amount)']]
 
             # 최종 출력
             total_amount = df_final['금액(Amount)'].sum()
