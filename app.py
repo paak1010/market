@@ -11,7 +11,6 @@ st.write("발주 시스템에서 다운받은 **원본 엑셀 파일(예: 12.xls
 # ==========================================
 # 1. 서식파일에서 추출한 전체 마스터 데이터 내장
 # ==========================================
-# (서식파일에 있던 78개의 모든 상품 바코드-ME코드 매핑)
 FULL_PRODUCT_MAP = {
     8809020342310: 'ME90521CLA', 8809020342211: 'ME90521CLL', 8809020342419: 'ME90521CLS',
     8809020340804: 'ME90521MC1', 8809020340774: 'ME90521LP2', 8809020348992: 'ME90521E18',
@@ -41,7 +40,6 @@ FULL_PRODUCT_MAP = {
     8809020343706: 'ME90521WC6', 8809020344338: 'ME00621FHH', 8809020344321: 'ME90621MAM'
 }
 
-# (서식파일에 있던 전체 35개 배송처 매핑)
 FULL_STORE_MAP = {
     '0903목천물류서비스센터SORTATION': 81020901, '0903목천물류서비스센터FLOW': 81020902,
     '0903목천물류서비스센터STOCK': 81020903, '0982안성ADC물류센터STOCK': 81020982,
@@ -66,21 +64,44 @@ FULL_STORE_MAP = {
 # ==========================================
 # 2. 메인 화면: 원본 데이터 업로드
 # ==========================================
-raw_file = st.file_uploader("발주 원본 파일 (예: 12.xlsx) 1개만 올려주세요.", type=['xlsx', 'xls', 'csv'])
+raw_file = st.file_uploader("발주 원본 파일 (예: 12.xlsx, dlaskjd.htm.xlsx) 1개만 올려주세요.", type=['xlsx', 'xls', 'csv'])
 
 if raw_file:
     try:
         with st.spinner("데이터 변환 및 그룹핑 중..."):
             
-            # --- [Step 1] 원본 데이터 로드 ---
+            # --- [Step 1] 똑똑한 데이터 로드 (헤더 자동 찾기) ---
+            # CSV든 엑셀이든 우선 파일을 읽어서 '상품코드' 문자가 있는 줄(index)을 찾습니다.
             if raw_file.name.endswith('.csv'):
-                df_raw = pd.read_csv(raw_file, skiprows=1)
+                temp_df = pd.read_csv(raw_file, header=None, encoding='utf-8-sig', errors='ignore')
+                raw_file.seek(0)
+                
+                header_idx = 0
+                for i, row in temp_df.iterrows():
+                    if '상품코드' in row.dropna().astype(str).values:
+                        header_idx = i
+                        break
+                df_raw = pd.read_csv(raw_file, skiprows=header_idx)
+
             else:
                 try:
-                    df_raw = pd.read_excel(raw_file, skiprows=1, engine='openpyxl')
-                except:
+                    temp_df = pd.read_excel(raw_file, header=None, engine='openpyxl')
                     raw_file.seek(0)
-                    df_raw = pd.read_excel(raw_file, engine='openpyxl')
+                    
+                    header_idx = 0
+                    for i, row in temp_df.iterrows():
+                        if '상품코드' in row.dropna().astype(str).values:
+                            header_idx = i
+                            break
+                    df_raw = pd.read_excel(raw_file, skiprows=header_idx, engine='openpyxl')
+                except Exception as ex:
+                    # 간혹 확장자만 xlsx이고 알맹이는 html/csv인 가짜 엑셀파일을 방어합니다.
+                    raw_file.seek(0)
+                    df_raw = pd.read_html(raw_file)[0]
+                    # HTML 테이블인 경우 헤더를 다시 맞춥니다.
+                    header_idx = df_raw[df_raw.eq('상품코드').any(axis=1)].index[0]
+                    df_raw.columns = df_raw.iloc[header_idx]
+                    df_raw = df_raw[header_idx + 1:]
 
             # TPND, TPNB 컬럼 삭제
             cols_to_drop = [c for c in ['TPND', 'TPNB'] if c in df_raw.columns]
@@ -90,7 +111,6 @@ if raw_file:
             # --- [Step 2] 상품코드 매핑 (내장 데이터 활용) ---
             if '상품코드' in df_raw.columns:
                 df_raw['바코드_숫자'] = pd.to_numeric(df_raw['상품코드'], errors='coerce')
-                # 서식파일 전체 바코드 데이터로 ME코드 매핑
                 df_raw['ME코드'] = df_raw['바코드_숫자'].map(FULL_PRODUCT_MAP)
                 df_raw = df_raw.drop(columns=['상품코드'])
             else:
@@ -103,11 +123,9 @@ if raw_file:
                 store_str, type_str = str(store).strip(), str(in_type).strip()
                 raw_key = (store_str + type_str).replace(" ", "")
                 
-                # 1. 정확히 일치하는 경우
                 if raw_key in FULL_STORE_MAP: 
                     return FULL_STORE_MAP[raw_key]
                 
-                # 2. HYPER_FLOW, MIX 등 예외 케이스 처리
                 if 'HYPER_FLOW' in type_str:
                     fallback = (store_str + 'FLOW').replace(" ", "")
                     return FULL_STORE_MAP.get(fallback, 81040913)
@@ -115,7 +133,7 @@ if raw_file:
                     fallback = (store_str + 'SORTATION').replace(" ", "")
                     return FULL_STORE_MAP.get(fallback, 81040913)
                 
-                return FULL_STORE_MAP.get(raw_key, 81040913) # 못 찾으면 함안 디폴트값
+                return FULL_STORE_MAP.get(raw_key, 81040913)
 
             if '납품처' in df_raw.columns and '입고타입' in df_raw.columns:
                 df_raw['배송코드'] = df_raw.apply(lambda r: get_delivery_code(r['납품처'], r['입고타입']), axis=1)
@@ -135,7 +153,7 @@ if raw_file:
                 df_final = df_final.groupby(groupby_cols, as_index=False).agg({'수량': 'sum', 'Amount': 'sum'})
                 df_final = df_final.sort_values(by=['배송코드', '상품코드']).reset_index(drop=True)
 
-            st.success("✅ 파일 변환 완료! 이제 서식파일이나 마스터파일 업로드 없이도 모든 규칙이 완벽 적용됩니다.")
+            st.success("✅ 파일 변환 완료! 어떤 양식의 파일이든 헤더를 알아서 인식하여 변환합니다.")
             st.dataframe(df_final)
 
             # 엑셀 다운로드 버튼
