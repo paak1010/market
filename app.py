@@ -5,59 +5,30 @@ import io
 
 st.set_page_config(page_title="Tesco 납품 데이터 자동화", layout="wide")
 
-st.title("📦 Tesco 발주 데이터 자동 변환기 (최종 Excel 버전)")
-st.write("""
-원본 데이터(ordview_...) 파일만 업로드하면, 기준 정보(상품코드, 배송코드 등)를 
-자동으로 매핑하고 **동일 배송처/상품의 수량을 합산하여 엑셀(.xlsx) 파일로** 만들어줍니다.
-""")
+st.title("📦 Tesco 발주 데이터 자동 변환기 (단독 실행 버전)")
+st.write("다른 마스터 파일 업로드 필요 없이, **원본 데이터(ordview) 하나만 올리면** 바로 최종 엑셀을 뽑아줍니다.")
 
 # ==========================================
-# 1. 사이드바: 마스터 데이터 세팅
+# 1. 내장형 마스터 데이터 (코드 내부에 직접 정의)
 # ==========================================
-st.sidebar.header("⚙️ 기초 마스터 데이터")
-st.sidebar.info("""
-기준 정보 파일은 매번 업로드할 필요 없이 
-앱과 같은 폴더에 아래 이름으로 저장해두면 자동으로 불러옵니다.
-- 상품코드.csv
-- Tesco 발주처코드.csv
-""")
-
-# 기본 파일 경로
-master_prod_path = '상품코드.csv'
-master_store_path = 'Tesco 발주처코드.csv'
-
-# 혹시 파일이 폴더에 없을 경우를 대비한 수동 업로드 창
-upload_prod = st.sidebar.file_uploader("상품코드 마스터 수동 업로드 (선택)", type=['csv'])
-upload_store = st.sidebar.file_uploader("발주처코드 마스터 수동 업로드 (선택)", type=['csv'])
-
-df_prod = None
-df_store = None
-
-try:
-    if upload_prod:
-        df_prod = pd.read_csv(upload_prod)
-    else:
-        df_prod = pd.read_csv(master_prod_path)
-        
-    if upload_store:
-        df_store = pd.read_csv(upload_store)
-    else:
-        df_store = pd.read_csv(master_store_path)
-        
-    st.sidebar.success("✅ 마스터 데이터 로드 완료")
-except FileNotFoundError:
-    st.sidebar.error("⚠️ 폴더에 마스터 파일이 없습니다. 사이드바에서 직접 업로드하거나 앱 폴더에 파일을 넣어주세요.")
-    st.stop() # 마스터 데이터가 없으면 앱 구동 중지
+# 엑셀 파일 없이도 바코드를 ME코드로 자동 변환하도록 딕셔너리 내장
+PRODUCT_MAP = {
+    8809020346592: "ME90621ADI",  # 딥클렌저 100G
+    8809020346509: "ME90621AFE",  # 포밍워시 200ML
+    8809020345267: "ME80421DR2",  # 마사지롤온로션 50ML
+    8809020345212: "ME00421186",  # 스프레이파이쿨 180ML
+    8809020345229: "ME00421301"   # 스프레이익스트림 180ML
+}
+# (※ 나중에 새로운 상품이 추가되면 위 딕셔너리에 숫자와 ME코드만 한 줄 추가하시면 됩니다.)
 
 # ==========================================
-# 2. 메인 화면: 원본 데이터 업로드 및 처리
+# 2. 메인 화면: 단일 원본 파일 업로드
 # ==========================================
-st.header("📂 오늘의 원본 데이터 업로드")
-file_raw = st.file_uploader("발주 시스템에서 다운받은 원본 데이터(csv)를 올려주세요.", type=['csv'])
+file_raw = st.file_uploader("발주 시스템에서 다운받은 원본 데이터(csv) 파일 하나만 올려주세요.", type=['csv'])
 
 if file_raw:
     try:
-        with st.spinner("데이터를 분석하고 변환하는 중입니다..."):
+        with st.spinner("데이터를 정제하고 그룹핑하는 중입니다..."):
             
             # --- [Step 1] 원본 데이터 불러오기 ---
             try:
@@ -66,18 +37,19 @@ if file_raw:
                 file_raw.seek(0)
                 df_raw = pd.read_csv(file_raw)
 
-            # TPND, TPNB 열 제거
+            # 불필요한 열 (TPND, TPNB) 제거
             cols_to_drop = [c for c in ['TPND', 'TPNB'] if c in df_raw.columns]
             if cols_to_drop:
                 df_raw = df_raw.drop(columns=cols_to_drop)
 
-            # --- [Step 2] 상품코드 매핑 (바코드 -> ME코드) ---
+            # --- [Step 2] 상품코드 매핑 (내장 데이터 활용) ---
             if '상품코드' in df_raw.columns:
-                df_raw['상품코드'] = pd.to_numeric(df_raw['상품코드'], errors='coerce')
-            df_prod['바코드'] = pd.to_numeric(df_prod['바코드'], errors='coerce')
-            
-            df_raw = pd.merge(df_raw, df_prod[['바코드', 'ME코드']], 
-                              left_on='상품코드', right_on='바코드', how='left')
+                # 바코드를 숫자로 변환 후 내장된 PRODUCT_MAP을 통해 ME코드로 변경
+                df_raw['바코드_숫자'] = pd.to_numeric(df_raw['상품코드'], errors='coerce')
+                # 매핑된 ME코드가 있으면 그걸 쓰고, 없으면 원래 바코드 값 유지
+                df_raw['ME코드'] = df_raw['바코드_숫자'].map(PRODUCT_MAP)
+            else:
+                df_raw['ME코드'] = np.nan
 
             # --- [Step 3] 발주/배송코드 조건부 할당 ---
             df_raw['발주코드'] = 81020000
@@ -98,7 +70,7 @@ if file_raw:
                 df_raw['배송코드'] = df_raw.apply(
                     lambda row: get_delivery_code(row['납품처'], row['입고타입']), axis=1
                 )
-                df_raw['배송코드'] = df_raw['배송코드'].fillna(81040913)
+                df_raw['배송코드'] = df_raw['배송코드'].fillna(81040913) # 못 찾으면 함안 디폴트 할당
 
             # --- [Step 4] 컬럼명 변경 및 수량 필터링 ---
             df_result = df_raw.rename(columns={
@@ -126,11 +98,12 @@ if file_raw:
                     '수량': 'sum',
                     'Amount': 'sum'
                 })
-                # 배송코드 및 상품코드 순으로 정렬
+                # 배송코드 및 상품코드 순으로 깔끔하게 정렬
                 df_final = df_final.sort_values(by=['배송코드', '상품코드']).reset_index(drop=True)
 
-            st.success("✅ 매핑 및 그룹핑 완료! 엑셀 파일이 준비되었습니다.")
-            st.dataframe(df_final) # 화면에 결과 미리보기 출력
+            # 화면에 결과 출력
+            st.success("✅ 매핑 및 그룹핑 완료! (외부 파일 연동 없이 독립 실행 성공)")
+            st.dataframe(df_final)
 
             # --- [Step 6] 엑셀(.xlsx) 파일 생성 및 다운로드 ---
             output = io.BytesIO()
@@ -145,7 +118,4 @@ if file_raw:
             )
 
     except Exception as e:
-        st.error(f"오류가 발생했습니다: {e}")
-        st.warning("원본 데이터 파일 형식이 맞는지 다시 한 번 확인해주세요.")
-else:
-    st.info("👈 메인 화면에 원본 데이터를 업로드해주세요.")
+        st.error(f"데이터 처리 중 문제가 발생했습니다: {e}")
