@@ -5,11 +5,11 @@ import io
 
 st.set_page_config(page_title="Tesco 납품 데이터 자동화", layout="wide")
 
-st.title("📦 Tesco 발주 데이터 자동 변환기 (서식파일 양식 출력)")
+st.title("📦 Tesco 발주 데이터 자동 변환기 (에러 완벽 차단본)")
 st.write("발주 원본 엑셀을 올리시면 **Tesco 업로드 서식파일 양식과 100% 동일한 형태**로 데이터를 정제하여 엑셀로 뽑아줍니다.")
 
 # ==========================================
-# 1. 내장형 마스터 데이터 (수정 불필요)
+# 1. 내장형 마스터 데이터
 # ==========================================
 FULL_PRODUCT_MAP = {
     8809020342310: 'ME90521CLA', 8809020342211: 'ME90521CLL', 8809020342419: 'ME90521CLS',
@@ -64,13 +64,13 @@ FULL_STORE_MAP = {
 # ==========================================
 # 2. 메인 화면: 원본 데이터 업로드
 # ==========================================
-raw_file = st.file_uploader("발주 원본 파일 (예: 12.xlsx) 하나만 올려주세요.", type=['xlsx', 'xls', 'csv'])
+raw_file = st.file_uploader("발주 원본 파일 하나만 올려주세요.", type=['xlsx', 'xls', 'csv'])
 
 if raw_file:
     try:
         with st.spinner("데이터를 서식파일 양식으로 굽는 중입니다..."):
             
-            # --- [Step 1] 똑똑한 데이터 로드 (헤더 자동 찾기) ---
+            # --- [Step 1] 똑똑한 데이터 로드 (헤더 찾기) ---
             if raw_file.name.endswith('.csv'):
                 temp_df = pd.read_csv(raw_file, header=None, encoding='utf-8-sig', errors='ignore')
                 raw_file.seek(0)
@@ -89,6 +89,14 @@ if raw_file:
                     df_raw.columns = df_raw.iloc[header_idx]
                     df_raw = df_raw[header_idx + 1:]
 
+            # [★안전장치 1★] 엑셀 내부에 이름이 똑같은 열이 여러 개 있으면 아예 정리해버림
+            df_raw = df_raw.loc[:, ~df_raw.columns.duplicated()]
+
+            # TPND, TPNB 컬럼 삭제
+            cols_to_drop = [c for c in ['TPND', 'TPNB'] if c in df_raw.columns]
+            if cols_to_drop:
+                df_raw = df_raw.drop(columns=cols_to_drop)
+
             # --- [Step 2] 배송코드 추출 ---
             def get_delivery_code(store, in_type):
                 store_str, type_str = str(store).strip(), str(in_type).strip()
@@ -100,15 +108,18 @@ if raw_file:
 
             df_raw['배송코드'] = df_raw.apply(lambda r: get_delivery_code(r['납품처'], r['입고타입']), axis=1)
 
-            # --- [Step 3] 상품코드 변환 ---
+            # --- [Step 3] 상품코드 변환 [★에러 원천 차단★] ---
             if '상품코드' in df_raw.columns:
-                df_raw['바코드_숫자'] = pd.to_numeric(df_raw['상품코드'], errors='coerce')
-                df_raw['ME코드'] = df_raw['바코드_숫자'].map(FULL_PRODUCT_MAP)
+                바코드_숫자 = pd.to_numeric(df_raw['상품코드'], errors='coerce')
+                # 기존 '상품코드' 열을 완전히 지우고 'ME코드'로 새로 만듦! 
+                df_raw = df_raw.drop(columns=['상품코드'])
+                df_raw['상품코드'] = 바코드_숫자.map(FULL_PRODUCT_MAP)
             else:
-                df_raw['ME코드'] = np.nan
+                df_raw['상품코드'] = np.nan
 
             # --- [Step 4] 필요한 열만 뽑아서 수량 0 제거 ---
-            df_result = df_raw.rename(columns={'ME코드': '상품코드', '낱개수량': '수량', '낱개당 단가': 'UNIT단가', '발주금액': 'Amount'})
+            # 이미 이름이 '상품코드' 이므로 ME코드를 바꿀 필요 없음
+            df_result = df_raw.rename(columns={'낱개수량': '수량', '낱개당 단가': 'UNIT단가', '발주금액': 'Amount'})
             df_result['수량'] = pd.to_numeric(df_result['수량'], errors='coerce').fillna(0)
             df_result = df_result[df_result['수량'] > 0]
 
@@ -118,7 +129,6 @@ if raw_file:
             df_grouped = df_grouped.sort_values(by=['배송코드', '상품코드']).reset_index(drop=True)
 
             # --- [Step 6] ★ 서식파일과 100% 동일한 양식으로 재배치 ★ ---
-            # 이미지에서 보여주신 12개 열 구조 그대로 프레임을 짭니다.
             df_final = pd.DataFrame()
             df_final['발주처코드(EDI)'] = 133
             df_final['배송코드(EDI)'] = np.nan
@@ -133,7 +143,7 @@ if raw_file:
             df_final['금       액'] = df_grouped['Amount'].astype(int)
             df_final['부  가   세'] = 0
 
-            st.success("✅ 사진과 동일한 양식으로 완벽히 변환되었습니다! (배송코드+상품코드 동일 시 합산 적용)")
+            st.success("✅ 사진과 동일한 12열 양식으로 완벽히 변환되었습니다! (그룹핑 중복 에러 해결)")
             st.dataframe(df_final)
 
             # --- [Step 7] 엑셀 다운로드 ---
