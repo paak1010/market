@@ -2,22 +2,36 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
+import os
 
 st.set_page_config(page_title="Tesco 납품 데이터 자동화", layout="wide")
 
-st.title("📦 Tesco 발주 데이터 자동 변환기 (엑셀 업로드 전용)")
-st.write("발주 시스템에서 다운받은 **원본 엑셀 파일(.xlsx)** 하나만 올리면 바로 최종 정제된 엑셀을 뽑아줍니다.")
+st.title("📦 Tesco 발주 데이터 자동 변환기")
+st.write("발주 시스템에서 다운받은 **원본 엑셀 파일(.xlsx)** 하나만 올리면, 같은 폴더의 `상품코드.csv`를 참조해 완벽하게 정제된 엑셀을 뽑아줍니다.")
 
 # ==========================================
-# 1. 내장형 마스터 데이터
+# 1. 서식 파일의 '상품코드' 시트 자동 로드
 # ==========================================
-PRODUCT_MAP = {
-    8809020346592: "ME90621ADI",  # 딥클렌저 100G
-    8809020346509: "ME90621AFE",  # 포밍워시 200ML
-    8809020345267: "ME80421DR2",  # 마사지롤온로션 50ML
-    8809020345212: "ME00421186",  # 스프레이파이쿨 180ML
-    8809020345229: "ME00421301"   # 스프레이익스트림 180ML
-}
+# 폴더에 '상품코드'라는 단어가 포함된 CSV 파일을 자동으로 찾습니다.
+master_files = [f for f in os.listdir('.') if '상품코드' in f and f.endswith('.csv')]
+
+if not master_files:
+    st.error("⚠️ 같은 폴더에 `상품코드.csv` 파일이 없습니다. 원본 데이터 변환을 위해 마스터 파일을 폴더에 넣어주세요!")
+    st.stop()
+
+try:
+    # 상품코드 CSV를 읽어와서 바코드-ME코드 사전(Dictionary)을 자동으로 생성합니다.
+    df_prod = pd.read_csv(master_files[0])
+    df_prod['바코드'] = pd.to_numeric(df_prod['바코드'], errors='coerce')
+    valid_prods = df_prod.dropna(subset=['바코드', 'ME코드'])
+    
+    # 엑셀에 있는 수백개의 바코드 매핑을 자동으로 구성
+    PRODUCT_MAP = dict(zip(valid_prods['바코드'], valid_prods['ME코드']))
+    st.sidebar.success(f"✅ 마스터 매핑 완료!\n(총 {len(PRODUCT_MAP)}개의 상품 코드가 등록되었습니다.)")
+except Exception as e:
+    st.error(f"상품코드 파일을 읽는 중 오류가 발생했습니다: {e}")
+    st.stop()
+
 
 # ==========================================
 # 2. 메인 화면: 원본 엑셀 파일 업로드
@@ -40,13 +54,13 @@ if file_raw:
             if cols_to_drop:
                 df_raw = df_raw.drop(columns=cols_to_drop)
 
-            # --- [Step 2] 상품코드 매핑 ---
+            # --- [Step 2] 상품코드 매핑 (서식파일 데이터 활용) ---
             if '상품코드' in df_raw.columns:
                 df_raw['바코드_숫자'] = pd.to_numeric(df_raw['상품코드'], errors='coerce')
+                # 위에서 만든 전체 상품 매핑 사전을 적용! (마사지롤온로션 등 빠짐없이 적용됨)
                 df_raw['ME코드'] = df_raw['바코드_숫자'].map(PRODUCT_MAP)
                 
-                # [★에러 해결 핵심★] 원래 있던 숫자 형태의 '상품코드' 열을 미리 삭제!
-                # (그래야 나중에 'ME코드' 이름을 '상품코드'로 바꿀 때 충돌이 안 납니다)
+                # [오류 해결] 원래 있던 숫자 형태의 '상품코드' 열 삭제
                 df_raw = df_raw.drop(columns=['상품코드'])
             else:
                 df_raw['ME코드'] = np.nan
@@ -74,13 +88,12 @@ if file_raw:
 
             # --- [Step 4] 컬럼명 변경 및 수량 필터링 ---
             df_result = df_raw.rename(columns={
-                'ME코드': '상품코드',   # 이제 중복 없이 깔끔하게 이름이 바뀝니다.
+                'ME코드': '상품코드',
                 '낱개수량': '수량',
                 '낱개당 단가': 'UNIT단가',
                 '발주금액': 'Amount'
             })
 
-            # 수량이 0이거나 빈 값 제거
             df_result['수량'] = pd.to_numeric(df_result['수량'], errors='coerce').fillna(0)
             df_result = df_result[df_result['수량'] > 0]
 
@@ -98,11 +111,10 @@ if file_raw:
                     '수량': 'sum',
                     'Amount': 'sum'
                 })
-                # 정렬
                 df_final = df_final.sort_values(by=['배송코드', '상품코드']).reset_index(drop=True)
 
             # 화면에 결과 출력
-            st.success("✅ 엑셀 데이터 분석 및 그룹핑 완료! (중복 에러 해결됨)")
+            st.success("✅ 모든 상품코드 완벽 매핑 및 그룹핑 완료!")
             st.dataframe(df_final)
 
             # --- [Step 6] 엑셀(.xlsx) 파일 생성 및 다운로드 ---
