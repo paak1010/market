@@ -179,7 +179,7 @@ if raw_file:
             # --- 5. 최종 9개 열 생성 (수주일자, 납품일자 맨 앞에 배치) ---
             df_final = pd.DataFrame()
             df_final['수주일자'] = date.today().strftime('%Y-%m-%d') # 오늘 날짜 적용
-            df_final['납품일자'] = df_grouped['납품일자']            # 추출한 날짜 적용
+            df_final['납품일자'] = df_grouped['납품일자'] .strftime('%Y-%m-%d')           # 추출한 날짜 적용
             df_final['발주코드'] = df_grouped['발주코드'].astype(int)
             df_final['배송코드'] = df_grouped['배송코드'].astype(int)
             df_final['상품코드'] = df_grouped['상품코드']
