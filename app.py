@@ -1,92 +1,103 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import io
-import os
 
-st.set_page_config(page_title="Tesco 납품 데이터 자동화", layout="wide")
+st.set_page_config(page_title="Tesco 발주 데이터 자동 변환기", layout="wide")
 
-st.title("📦 Tesco 발주 데이터 자동 변환기")
-st.write("발주 시스템에서 다운받은 **원본 엑셀 파일(.xlsx)** 하나만 올리면, 같은 폴더의 `상품코드.csv`를 참조해 완벽하게 정제된 엑셀을 뽑아줍니다.")
-
-# ==========================================
-# 1. 서식 파일의 '상품코드' 시트 자동 로드
-# ==========================================
-# 폴더에 '상품코드'라는 단어가 포함된 CSV 파일을 자동으로 찾습니다.
-master_files = [f for f in os.listdir('.') if '상품코드' in f and f.endswith('.csv')]
-
-if not master_files:
-    st.error("⚠️ 같은 폴더에 `상품코드.csv` 파일이 없습니다. 원본 데이터 변환을 위해 마스터 파일을 폴더에 넣어주세요!")
-    st.stop()
-
-try:
-    # 상품코드 CSV를 읽어와서 바코드-ME코드 사전(Dictionary)을 자동으로 생성합니다.
-    df_prod = pd.read_csv(master_files[0])
-    df_prod['바코드'] = pd.to_numeric(df_prod['바코드'], errors='coerce')
-    valid_prods = df_prod.dropna(subset=['바코드', 'ME코드'])
-    
-    # 엑셀에 있는 수백개의 바코드 매핑을 자동으로 구성
-    PRODUCT_MAP = dict(zip(valid_prods['바코드'], valid_prods['ME코드']))
-    st.sidebar.success(f"✅ 마스터 매핑 완료!\n(총 {len(PRODUCT_MAP)}개의 상품 코드가 등록되었습니다.)")
-except Exception as e:
-    st.error(f"상품코드 파일을 읽는 중 오류가 발생했습니다: {e}")
-    st.stop()
-
+st.title("📦 Tesco 발주 데이터 자동 변환기 (마스터파일 연동형)")
+st.write("하드코딩 없이 **'Tesco 서식파일(마스터)'**의 시트 정보를 읽어와서 원본 데이터를 완벽하게 변환합니다.")
 
 # ==========================================
-# 2. 메인 화면: 원본 엑셀 파일 업로드
+# 1. 파일 업로드 섹션 (두 개 모두 올려주세요)
 # ==========================================
-file_raw = st.file_uploader("발주 시스템에서 다운받은 원본 엑셀 파일(.xlsx) 하나만 올려주세요.", type=['xlsx', 'xls'])
+col1, col2 = st.columns(2)
+with col1:
+    st.subheader("1️⃣ 마스터 서식파일 업로드")
+    master_file = st.file_uploader("Tesco 서식파일(914)...xlsx 를 올려주세요.", type=['xlsx', 'xls'], key="master")
 
-if file_raw:
+with col2:
+    st.subheader("2️⃣ 원본 데이터 업로드")
+    raw_file = st.file_uploader("발주 원본 파일 (예: 12.xlsx) 을 올려주세요.", type=['xlsx', 'xls', 'csv'], key="raw")
+
+if master_file and raw_file:
     try:
-        with st.spinner("엑셀 데이터를 읽고 정제하는 중입니다..."):
+        with st.spinner("마스터 서식파일의 규칙을 분석하고 데이터를 변환하는 중입니다..."):
             
-            # --- [Step 1] 원본 엑셀 데이터 불러오기 ---
-            try:
-                df_raw = pd.read_excel(file_raw, skiprows=1, engine='openpyxl')
-            except:
-                file_raw.seek(0)
-                df_raw = pd.read_excel(file_raw, engine='openpyxl')
+            # ==========================================
+            # [Step 1] 마스터 파일에서 기준 정보 읽기 (핵심!)
+            # ==========================================
+            # 1. 상품코드 매핑 데이터 가져오기
+            df_prod_master = pd.read_excel(master_file, sheet_name='상품코드', engine='openpyxl')
+            df_prod_master['바코드'] = pd.to_numeric(df_prod_master['바코드'], errors='coerce')
+            valid_prods = df_prod_master.dropna(subset=['바코드', 'ME코드'])
+            PRODUCT_MAP = dict(zip(valid_prods['바코드'], valid_prods['ME코드']))
 
-            # 불필요한 열 제거
+            # 2. 발주처코드 매핑 데이터 가져오기 ('납품처&타입' 활용)
+            df_store_master = pd.read_excel(master_file, sheet_name='Tesco 발주처코드', engine='openpyxl')
+            valid_stores = df_store_master.dropna(subset=['납품처&타입', '배송코드']).copy()
+            valid_stores['납품처&타입'] = valid_stores['납품처&타입'].astype(str).str.replace(" ", "") # 공백 제거하여 매핑 정확도 높임
+            STORE_MAP = dict(zip(valid_stores['납품처&타입'], valid_stores['배송코드']))
+
+            # ==========================================
+            # [Step 2] 원본 데이터 읽기 및 정제
+            # ==========================================
+            # csv, xlsx 모두 지원하도록 처리
+            if raw_file.name.endswith('.csv'):
+                df_raw = pd.read_csv(raw_file, skiprows=1)
+            else:
+                df_raw = pd.read_excel(raw_file, skiprows=1, engine='openpyxl')
+
+            # TPND, TPNB 열 제거
             cols_to_drop = [c for c in ['TPND', 'TPNB'] if c in df_raw.columns]
             if cols_to_drop:
                 df_raw = df_raw.drop(columns=cols_to_drop)
 
-            # --- [Step 2] 상품코드 매핑 (서식파일 데이터 활용) ---
+            # ==========================================
+            # [Step 3] 상품코드 변환 (서식파일 기준)
+            # ==========================================
             if '상품코드' in df_raw.columns:
                 df_raw['바코드_숫자'] = pd.to_numeric(df_raw['상품코드'], errors='coerce')
-                # 위에서 만든 전체 상품 매핑 사전을 적용! (마사지롤온로션 등 빠짐없이 적용됨)
+                # 서식파일에서 추출한 수백개의 매핑 딕셔너리로 한 번에 변환
                 df_raw['ME코드'] = df_raw['바코드_숫자'].map(PRODUCT_MAP)
-                
-                # [오류 해결] 원래 있던 숫자 형태의 '상품코드' 열 삭제
-                df_raw = df_raw.drop(columns=['상품코드'])
+                df_raw = df_raw.drop(columns=['상품코드']) # 기존 바코드 열은 삭제
             else:
-                df_raw['ME코드'] = np.nan
+                df_raw['ME코드'] = None
 
-            # --- [Step 3] 발주/배송코드 조건부 할당 ---
+            # ==========================================
+            # [Step 4] 배송코드 변환 (서식파일 기준)
+            # ==========================================
             df_raw['발주코드'] = 81020000
-            
+
             def get_delivery_code(store, in_type):
-                store_str = str(store).strip()
-                type_str = str(in_type).strip()
+                store_str = str(store)
+                type_str = str(in_type)
                 
-                if '안성' in store_str:
-                    if 'FLOW' in type_str: return 81020981
-                    if 'SORT' in type_str: return 81020980
-                elif '함안' in store_str:
-                    if 'FLOW' in type_str: return 81040912
-                    return 81040913 
-                return np.nan
+                # 원본 데이터의 납품처와 입고타입을 붙임 (공백 무시)
+                raw_key = (store_str + type_str).replace(" ", "")
+                
+                # 1. 서식파일 '납품처&타입'과 정확히 일치하는지 확인
+                if raw_key in STORE_MAP:
+                    return STORE_MAP[raw_key]
+                
+                # 2. HYPER_FLOW나 MIX 등 특수 케이스 보정 (서식파일에 FLOW/SORTATION으로 되어있을 경우)
+                if 'HYPER_FLOW' in type_str:
+                    fallback_key = (store_str + 'FLOW').replace(" ", "")
+                    if fallback_key in STORE_MAP: return STORE_MAP[fallback_key]
+                elif 'MIX' in type_str:
+                    fallback_key = (store_str + 'SORTATION').replace(" ", "")
+                    if fallback_key in STORE_MAP: return STORE_MAP[fallback_key]
+                
+                return None
 
             if '납품처' in df_raw.columns and '입고타입' in df_raw.columns:
                 df_raw['배송코드'] = df_raw.apply(
                     lambda row: get_delivery_code(row['납품처'], row['입고타입']), axis=1
                 )
-                df_raw['배송코드'] = df_raw['배송코드'].fillna(81040913)
+                df_raw['배송코드'] = df_raw['배송코드'].fillna(81040913) # 기본값 처리
 
-            # --- [Step 4] 컬럼명 변경 및 수량 필터링 ---
+            # ==========================================
+            # [Step 5] 최종 컬럼 정리 및 수량 합산
+            # ==========================================
             df_result = df_raw.rename(columns={
                 'ME코드': '상품코드',
                 '낱개수량': '수량',
@@ -94,6 +105,7 @@ if file_raw:
                 '발주금액': 'Amount'
             })
 
+            # 수량이 0인 항목 제거
             df_result['수량'] = pd.to_numeric(df_result['수량'], errors='coerce').fillna(0)
             df_result = df_result[df_result['수량'] > 0]
 
@@ -104,7 +116,7 @@ if file_raw:
             if '배송코드' in df_final.columns:
                 df_final['배송코드'] = df_final['배송코드'].astype(int)
 
-            # --- [Step 5] 동일 품목 수량/금액 합산 (그룹핑) ---
+            # 동일 상품 합산(그룹핑)
             groupby_cols = ['발주코드', '배송코드', '상품코드', '상품명', 'UNIT단가']
             if all(col in df_final.columns for col in groupby_cols):
                 df_final = df_final.groupby(groupby_cols, as_index=False).agg({
@@ -113,11 +125,12 @@ if file_raw:
                 })
                 df_final = df_final.sort_values(by=['배송코드', '상품코드']).reset_index(drop=True)
 
-            # 화면에 결과 출력
-            st.success("✅ 모든 상품코드 완벽 매핑 및 그룹핑 완료!")
+            # ==========================================
+            # [Step 6] 결과 출력 및 엑셀 다운로드
+            # ==========================================
+            st.success("✅ 마스터 파일의 규칙을 적용하여 완벽하게 변환되었습니다!")
             st.dataframe(df_final)
 
-            # --- [Step 6] 엑셀(.xlsx) 파일 생성 및 다운로드 ---
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_final.to_excel(writer, index=False, sheet_name='수주데이터')
@@ -130,4 +143,7 @@ if file_raw:
             )
 
     except Exception as e:
-        st.error(f"데이터 처리 중 문제가 발생했습니다: {e}")
+        st.error(f"오류 발생: {e}")
+        st.warning("파일이 올바른 형식인지 다시 확인해주세요.")
+else:
+    st.info("👈 위 두 칸에 파일을 모두 업로드해주세요.")
