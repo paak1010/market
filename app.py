@@ -4,7 +4,7 @@ import numpy as np
 import io
 import re
 import csv
-from datetime import date  # 수주일자(오늘)를 위해 추가
+from datetime import date
 
 st.set_page_config(page_title="Tesco 납품 데이터 자동화", layout="wide")
 
@@ -12,7 +12,7 @@ st.title("📦 Tesco 발주 데이터 자동 변환기 (날짜 추가본)")
 st.write("Tesco 주문서(CSV/Excel)를 업로드하면 수주일자와 납품일자를 자동으로 포함합니다.")
 
 # ==========================================
-# 1. 마스터 데이터 (기존과 동일)
+# 1. 마스터 데이터
 # ==========================================
 FULL_PRODUCT_MAP = {
     8809020342310: 'ME90521CLA', 8809020342211: 'ME90521CLL', 8809020342419: 'ME90521CLS',
@@ -100,7 +100,7 @@ if raw_file:
             for row in all_rows:
                 row_strs = [str(x).strip() for x in row]
                 
-                # '상품코드' 헤더 행을 찾을 때 '납품일자' 컬럼도 같이 맵핑합니다.
+                # 헤더 검색
                 if '상품코드' in row_strs and ('발주금액' in row_strs or '낱개수량' in row_strs):
                     col_map = {
                         '상품명': row_strs.index('상품명') if '상품명' in row_strs else -1,
@@ -110,7 +110,7 @@ if raw_file:
                         '단가': row_strs.index('낱개당 단가') if '낱개당 단가' in row_strs else -1,
                         '금액': row_strs.index('발주금액') if '발주금액' in row_strs else -1,
                         '납품처': row_strs.index('납품처') if '납품처' in row_strs else -1,
-                        '납품일자': row_strs.index('납품일자') if '납품일자' in row_strs else -1  # <--- 추가
+                        '납품일자': row_strs.index('납품일자') if '납품일자' in row_strs else -1
                     }
                     continue
                     
@@ -144,7 +144,7 @@ if raw_file:
                             '단가': get_val('단가'),
                             '금액': get_val('금액'),
                             '납품처': get_str('납품처'),
-                            '납품일자': get_str('납품일자')  # <--- 데이터 추출 추가
+                            '납품일자': get_str('납품일자')
                         })
                 except Exception:
                     pass
@@ -169,17 +169,21 @@ if raw_file:
             df['배송코드'] = df.apply(get_store_code, axis=1)
             df['발주코드'] = 81020000
             
-            # --- 합산 및 정렬 (납품일자 기준으로 묶음) ---
+            # --- 합산 및 정렬 ---
             df = df[df['수량'] > 0]
-            # 그룹화 기준에 '납품일자'를 추가하여 날짜별 데이터 유실 방지
             groupby_cols = ['발주코드', '배송코드', '상품코드', '상품명', '단가', '납품일자']
             df_grouped = df.groupby(groupby_cols, as_index=False).agg({'수량': 'sum', '금액': 'sum'})
             df_grouped = df_grouped.sort_values(by=['납품일자', '배송코드', '상품코드']).reset_index(drop=True)
 
-            # --- 5. 최종 9개 열 생성 (수주일자, 납품일자 맨 앞에 배치) ---
+            # --- 5. 최종 열 생성 및 날짜 형식 강제 지정 (YYYY-MM-DD) ---
             df_final = pd.DataFrame()
-            df_final['수주일자'] = date.today().strftime('%Y-%m-%d') # 오늘 날짜 적용
-            df_final['납품일자'] = df_grouped['납품일자'] .strftime('%Y-%m-%d')           # 추출한 날짜 적용
+            
+            # 수주일자: 오늘 날짜를 YYYY-MM-DD로
+            df_final['수주일자'] = date.today().strftime('%Y-%m-%d')
+            
+            # 납품일자: pandas datetime 객체로 변환한 후 dt.strftime()을 이용해 완벽한 YYYY-MM-DD 문자로 변환
+            df_final['납품일자'] = pd.to_datetime(df_grouped['납품일자'], errors='coerce').dt.strftime('%Y-%m-%d')
+            
             df_final['발주코드'] = df_grouped['발주코드'].astype(int)
             df_final['배송코드'] = df_grouped['배송코드'].astype(int)
             df_final['상품코드'] = df_grouped['상품코드']
@@ -188,6 +192,7 @@ if raw_file:
             df_final['단가'] = df_grouped['단가'].astype(int)
             df_final['금액(Amount)'] = df_grouped['금액'].astype(int)
 
+            # 최종 출력
             total_amount = df_final['금액(Amount)'].sum()
             st.success(f"✅ 처리가 완료되었습니다. (총액: {total_amount:,.0f}원)")
             st.dataframe(df_final, hide_index=True)
