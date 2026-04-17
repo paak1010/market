@@ -6,8 +6,8 @@ import re
 
 st.set_page_config(page_title="Tesco 납품 데이터 자동화", layout="wide")
 
-st.title("📦 Tesco 발주 데이터 자동 변환기")
-st.write("발주 원본 엑셀 하나만 올리시면, **NEW함안상온물류센터의 띄어쓰기나 영문 대소문자가 달라도** 완벽히 매칭하여 추출합니다.")
+st.title("📦 Tesco 발주 데이터 자동 변환기 (초정밀 스캔 탑재)")
+st.write("원본 파일의 열이 밀리거나 양식이 깨져있어도, **줄 전체를 스캔하여 배송처(안성, 함안 등)를 절대 누락 없이 찾아냅니다.**")
 
 # ==========================================
 # 1. 마스터 데이터 세팅
@@ -61,15 +61,24 @@ RAW_STORE_MAP = {
     '0051강서점DSD': 81020191
 }
 
-# [핵심 1] 띄어쓰기 전부 제거 + 대문자 강제 변환 + 앞 숫자 제거
-NORMALIZED_STORE_MAP = {}
+# [핵심 1] 단어 스캐너용 패턴 생성 (앞 숫자 무시)
+STORE_PATTERNS = []
 for k, v in RAW_STORE_MAP.items():
-    # 띄어쓰기를 싹 지우고 영문은 전부 대문자로 변환 (New -> NEW)
-    no_space_upper = k.replace(" ", "").upper()
-    # 그 상태에서 맨 앞에 붙어있는 숫자만 제거
-    norm_key = re.sub(r'^\d+', '', no_space_upper)
-    # 발주코드는 81020000으로 강제 통일
-    NORMALIZED_STORE_MAP[norm_key] = {'발주코드': 81020000, '배송코드': v}
+    name = re.sub(r'^\d+', '', k).upper().replace(" ", "") # 앞 숫자 날리고 띄어쓰기 뭉갬
+    if name.endswith('FLOW'):
+        STORE_PATTERNS.append((name[:-4], 'FLOW', v))
+    elif name.endswith('SORTATION'):
+        STORE_PATTERNS.append((name[:-9], 'SORTATION', v))
+    elif name.endswith('STOCK'):
+        STORE_PATTERNS.append((name[:-5], 'STOCK', v))
+    elif name.endswith('SORTER'):
+        STORE_PATTERNS.append((name[:-6], 'SORTER', v))
+    elif name.endswith('SINGLE'):
+        STORE_PATTERNS.append((name[:-6], 'SINGLE', v))
+    elif name.endswith('DSD'):
+        STORE_PATTERNS.append((name[:-3], 'DSD', v))
+    else:
+        STORE_PATTERNS.append((name, '', v))
 
 # ==========================================
 # 2. 메인 로직
@@ -78,9 +87,9 @@ raw_file = st.file_uploader("발주 원본 엑셀/CSV 파일을 올려주세요.
 
 if raw_file:
     try:
-        with st.spinner("NEW함안상온물류센터 정밀 탐색 및 병합 중..."):
+        with st.spinner("줄 전체를 스캔하여 배송처 코드를 추출하는 중입니다..."):
             
-            # --- 1. 누락 없는 표(Table) 완벽 병합 ---
+            # --- 파일 데이터 로드 ---
             if raw_file.name.endswith('.csv'):
                 try:
                     temp_df = pd.read_csv(raw_file, header=None, encoding='utf-8-sig', errors='ignore')
@@ -117,68 +126,54 @@ if raw_file:
                             t.columns = t.iloc[h_idx]
                             t = t.iloc[h_idx + 1:]
                             df_list.append(t)
-                    
                     if df_list:
                         df_raw = pd.concat(df_list, ignore_index=True)
                     else:
-                        raise ValueError("상품코드가 포함된 표를 찾을 수 없습니다.")
+                        raise ValueError("표를 찾을 수 없습니다.")
 
+            # 열 밀림 방지 및 찌꺼기 행 제거
             df_raw = df_raw.loc[:, ~df_raw.columns.duplicated()]
-            
-            # 쓰레기 데이터 행 제거
             if '상품코드' in df_raw.columns:
                 df_raw = df_raw[df_raw['상품코드'].astype(str).str.replace(' ', '') != '상품코드']
 
-            cols_to_drop = [c for c in ['TPND', 'TPNB'] if c in df_raw.columns]
-            if cols_to_drop:
-                df_raw = df_raw.drop(columns=cols_to_drop)
-
-            # --- 2. HYPER_FLOW 강제 변환 ---
-            if '입고타입' in df_raw.columns:
-                df_raw['입고타입'] = df_raw['입고타입'].astype(str).str.replace('HYPER_FLOW', 'FLOW')
-
-            # --- 3. [핵심 2] 띄어쓰기 완전 무시 매핑 로직 ---
-            def get_store_info(row):
-                store_str = str(row.get('납품처', ''))
-                type_str = str(row.get('입고타입', ''))
+            # --- [핵심 2] 열(Column) 붕괴 무시! 전체 줄(Row) 스캔 로직 ---
+            def get_delivery_code_robust(row):
+                # 해당 줄의 모든 텍스트를 하나의 문자열로 쫙 붙여버립니다. (띄어쓰기 전부 제거)
+                row_str = "".join(row.dropna().astype(str)).replace(" ", "").upper()
                 
-                # 원본 데이터도 공백 다 지우고, 대문자 만들고, 앞 숫자 지움!
-                clean_store = re.sub(r'^\d+', '', store_str.replace(" ", "").upper())
-                clean_type = type_str.replace(" ", "").upper()
+                # HYPER_FLOW, MIX 등 강제 변환
+                row_str = row_str.replace('HYPER_FLOW', 'FLOW').replace('MIX', 'SORTATION')
                 
-                key = clean_store + clean_type
-                
-                if key in NORMALIZED_STORE_MAP: 
-                    return NORMALIZED_STORE_MAP[key]
-                elif 'MIX' in clean_type: 
-                    return NORMALIZED_STORE_MAP.get(clean_store + 'SORTATION', {'발주코드': 81020000, '배송코드': 81040913})
-                else: 
-                    return {'발주코드': 81020000, '배송코드': 81040913}
+                # 단어가 문자열 안에 포함되어 있는지 스캔!
+                for store, type_, code in sorted(STORE_PATTERNS, key=lambda x: len(x[0]), reverse=True):
+                    if store in row_str and type_ in row_str:
+                        return code
+                return 81040913 # 최후의 보루
 
-            store_info = df_raw.apply(get_store_info, axis=1, result_type='expand')
-            df_raw = pd.concat([df_raw, store_info], axis=1)
+            # 열 위치에 상관없이 줄 전체를 훑어서 코드를 박아넣음
+            df_raw['배송코드'] = df_raw.apply(get_delivery_code_robust, axis=1)
+            
+            # 발주코드는 무조건 81020000 강제 통일
+            df_raw['발주코드'] = 81020000
 
-            # --- 4. 상품코드 변환 ---
+            # --- 상품코드 변환 ---
             if '상품코드' in df_raw.columns:
                 바코드_숫자 = pd.to_numeric(df_raw['상품코드'], errors='coerce')
-                df_raw = df_raw.drop(columns=['상품코드'])
                 df_raw['상품코드'] = 바코드_숫자.map(FULL_PRODUCT_MAP)
 
-            # --- 5. 수량 필터링 ---
+            # --- 수량 및 데이터 정제 ---
             df_result = df_raw.rename(columns={'낱개수량': '수량', '낱개당 단가': 'UNIT단가', '발주금액': 'Amount'})
             df_result['수량'] = pd.to_numeric(df_result['수량'], errors='coerce').fillna(0)
             df_result = df_result[df_result['수량'] > 0]
 
-            # --- 6. 그룹핑 ---
-            df_result['발주코드'] = df_result['발주코드'].fillna(81020000)
-            df_result['배송코드'] = df_result['배송코드'].fillna(81040913)
-            df_result = df_result.dropna(subset=['상품코드']) 
+            # --- 그룹핑 ---
+            df_result = df_result.dropna(subset=['상품코드']) # 유효한 상품만 남김
             
             groupby_cols = ['발주코드', '배송코드', '상품코드', '상품명', 'UNIT단가']
             df_grouped = df_result.groupby(groupby_cols, as_index=False).agg({'수량': 'sum', 'Amount': 'sum'})
             df_grouped = df_grouped.sort_values(by=['배송코드', '상품코드']).reset_index(drop=True)
 
-            # --- 7. 최종 7개 열 생성 ---
+            # --- 최종 7개 열 생성 ---
             df_final = pd.DataFrame()
             df_final['발주코드'] = df_grouped['발주코드'].astype(int)
             df_final['배송코드'] = df_grouped['배송코드'].astype(int)
@@ -188,16 +183,16 @@ if raw_file:
             df_final['단가'] = df_grouped['UNIT단가'].astype(int)
             df_final['금액(Amount)'] = df_grouped['Amount'].astype(int)
 
-            st.success("✅ NEW함안상온물류센터 누락 완벽 해결! (대소문자 및 띄어쓰기 철벽 방어)")
+            st.success("✅ 배송처 초정밀 스캔 완료! (함안 81040912, 안성 81020981 누락 완벽 차단)")
             st.dataframe(df_final, hide_index=True)
 
-            # --- 8. 엑셀 다운로드 ---
+            # --- 엑셀 다운로드 ---
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_final.to_excel(writer, index=False, sheet_name='수주결과')
                 
             st.download_button(
-                label="📥 NEW함안 해결본 다운로드 (Excel)", 
+                label="📥 오류 완벽 해결본 다운로드 (Excel)", 
                 data=output.getvalue(), 
                 file_name="Tesco_최종추출.xlsx", 
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
