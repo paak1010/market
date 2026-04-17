@@ -5,8 +5,8 @@ import io
 
 st.set_page_config(page_title="Tesco 납품 데이터 자동화", layout="wide")
 
-st.title("📦 Tesco 발주 데이터 자동 변환기 (VLOOKUP 매핑 버전)")
-st.write("원본 엑셀 1개만 올리시면 **마스터 시트의 VLOOKUP 규칙**에 따라 EDI/발주/배송코드를 자동으로 찾아 12열 양식으로 변환합니다.")
+st.title("📦 Tesco 발주 데이터 자동 변환기")
+st.warning("⚠️ 주의: 화면의 표를 마우스로 드래그해서 복사하면 글자가 뭉개집니다! 반드시 맨 아래의 **[엑셀 다운로드]** 버튼을 눌러주세요.")
 
 # ==========================================
 # 1. 마스터 데이터 (상품 및 발주처 상세 매핑)
@@ -25,7 +25,6 @@ PRODUCT_MAP = {
     8809020341207: 'ME80421DR2', 8809020346509: 'ME90621AFE', 8809020344321: 'ME90621MAM'
 }
 
-# [핵심] VLOOKUP을 대체하는 발주처별 상세 코드 맵 (납품처&타입 키 기준)
 STORE_DETAIL_MAP = {
     '0903목천물류서비스센터SORTATION': {'EDI': 133, '발주코드': 81020000, '배송코드': 81020901},
     '0903목천물류서비스센터FLOW': {'EDI': 622, '발주코드': 81021000, '배송코드': 81020902},
@@ -54,7 +53,7 @@ raw_file = st.file_uploader("발주 원본 파일 하나만 올려주세요.", t
 
 if raw_file:
     try:
-        with st.spinner("VLOOKUP 로직을 적용하여 데이터를 분류 중입니다..."):
+        with st.spinner("데이터를 처리 중입니다..."):
             
             # --- [Step 1] 데이터 로드 및 헤더 인식 ---
             if raw_file.name.endswith('.csv'):
@@ -81,17 +80,14 @@ if raw_file:
             if '입고타입' in df_raw.columns:
                 df_raw['입고타입'] = df_raw['입고타입'].astype(str).str.replace('HYPER_FLOW', 'FLOW')
 
-            # --- [Step 2] VLOOKUP 매핑 로직 (EDI/발주/배송코드 일괄 매칭) ---
+            # --- [Step 2] VLOOKUP 매핑 로직 ---
             def get_store_info(row):
                 store_str = str(row.get('납품처', '')).strip()
                 type_str = str(row.get('입고타입', '')).strip()
                 key = (store_str + type_str).replace(" ", "")
-                
-                # 매칭 데이터가 없으면 기본값 반환
-                default = {'EDI': 133, '발주코드': 8102000, '배송코드': 81040913}
+                default = {'EDI': 133, '발주코드': 81020000, '배송코드': 81040913}
                 return STORE_DETAIL_MAP.get(key, default)
 
-            # 매핑 정보를 새로운 열들로 생성
             store_info = df_raw.apply(get_store_info, axis=1, result_type='expand')
             df_raw = pd.concat([df_raw, store_info], axis=1)
 
@@ -108,7 +104,7 @@ if raw_file:
             df_result['수량'] = pd.to_numeric(df_result['수량'], errors='coerce').fillna(0)
             df_result = df_result[df_result['수량'] > 0]
 
-            # 배송코드와 발주코드가 모두 동일한 경우만 합산
+            # 배송코드와 상품코드가 모두 동일한 경우 합산
             groupby_cols = ['EDI', '발주코드', '배송코드', '상품코드', '상품명', 'UNIT단가']
             df_grouped = df_result.groupby(groupby_cols, as_index=False).agg({'수량': 'sum', 'Amount': 'sum'})
             df_grouped = df_grouped.sort_values(by=['배송코드', '상품코드']).reset_index(drop=True)
@@ -119,17 +115,26 @@ if raw_file:
             df_final['배송코드(EDI)'] = np.nan
             df_final['상품코드'] = np.nan
             df_final['Sum Code'] = np.nan
-            df_final['발주코드'] = df_grouped['발주코드'] # 이제 VLOOKUP 결과에 따라 81020000, 81021000 등이 들어감
+            df_final['발주코드'] = df_grouped['발주코드']
             df_final['배송코드'] = df_grouped['배송코드'].astype(int)
-            df_final['상품코드.1'] = df_grouped['상품코드']
+            df_final['상품코드_리얼'] = df_grouped['상품코드']  # 임시 이름
             df_final['상품명'] = df_grouped['상품명']
             df_final['UNIT수량'] = df_grouped['수량'].astype(int)
             df_final['UNIT단가'] = df_grouped['UNIT단가'].astype(int)
             df_final['금       액'] = df_grouped['Amount'].astype(int)
-            df_final['부  가   세'] = (df_final['금       액'] * 0.1).astype(int) # 부가세 자동 계산 추가
+            df_final['부  가   세'] = (df_final['금       액'] * 0.1).astype(int)
 
-            st.success("✅ VLOOKUP 매핑 완료! 납품처별로 다른 발주코드가 정확히 할당되었습니다.")
-            st.dataframe(df_final)
+            # ★ [중요] 사진과 완벽히 똑같이 열 이름 맞추기 (상품코드 중복 허용) ★
+            df_final.columns = [
+                '발주처코드(EDI)', '배송코드(EDI)', '상품코드', 'Sum Code', 
+                '발주코드', '배송코드', '상품코드', '상품명', 
+                'UNIT수량', 'UNIT단가', '금       액', '부  가   세'
+            ]
+
+            st.success("✅ 처리가 완료되었습니다! **꼭 아래 버튼을 눌러 엑셀 파일을 다운로드하세요.**")
+            
+            # 행 번호(Index) 숨겨서 깔끔하게 보여주기
+            st.dataframe(df_final, hide_index=True)
 
             # --- [Step 6] 엑셀 다운로드 ---
             output = io.BytesIO()
