@@ -9,7 +9,7 @@ st.title("📦 Tesco 발주 데이터 자동 변환기 (엑셀 업로드 전용)
 st.write("발주 시스템에서 다운받은 **원본 엑셀 파일(.xlsx)** 하나만 올리면 바로 최종 정제된 엑셀을 뽑아줍니다.")
 
 # ==========================================
-# 1. 내장형 마스터 데이터 (코드 내부에 직접 정의)
+# 1. 내장형 마스터 데이터
 # ==========================================
 PRODUCT_MAP = {
     8809020346592: "ME90621ADI",  # 딥클렌저 100G
@@ -22,7 +22,6 @@ PRODUCT_MAP = {
 # ==========================================
 # 2. 메인 화면: 원본 엑셀 파일 업로드
 # ==========================================
-# CSV가 아닌 xlsx, xls 만 받도록 수정
 file_raw = st.file_uploader("발주 시스템에서 다운받은 원본 엑셀 파일(.xlsx) 하나만 올려주세요.", type=['xlsx', 'xls'])
 
 if file_raw:
@@ -30,14 +29,13 @@ if file_raw:
         with st.spinner("엑셀 데이터를 읽고 정제하는 중입니다..."):
             
             # --- [Step 1] 원본 엑셀 데이터 불러오기 ---
-            # pd.read_csv 대신 pd.read_excel 사용
             try:
                 df_raw = pd.read_excel(file_raw, skiprows=1, engine='openpyxl')
             except:
                 file_raw.seek(0)
                 df_raw = pd.read_excel(file_raw, engine='openpyxl')
 
-            # 불필요한 열 (TPND, TPNB) 제거
+            # 불필요한 열 제거
             cols_to_drop = [c for c in ['TPND', 'TPNB'] if c in df_raw.columns]
             if cols_to_drop:
                 df_raw = df_raw.drop(columns=cols_to_drop)
@@ -46,6 +44,10 @@ if file_raw:
             if '상품코드' in df_raw.columns:
                 df_raw['바코드_숫자'] = pd.to_numeric(df_raw['상품코드'], errors='coerce')
                 df_raw['ME코드'] = df_raw['바코드_숫자'].map(PRODUCT_MAP)
+                
+                # [★에러 해결 핵심★] 원래 있던 숫자 형태의 '상품코드' 열을 미리 삭제!
+                # (그래야 나중에 'ME코드' 이름을 '상품코드'로 바꿀 때 충돌이 안 납니다)
+                df_raw = df_raw.drop(columns=['상품코드'])
             else:
                 df_raw['ME코드'] = np.nan
 
@@ -72,7 +74,7 @@ if file_raw:
 
             # --- [Step 4] 컬럼명 변경 및 수량 필터링 ---
             df_result = df_raw.rename(columns={
-                'ME코드': '상품코드',
+                'ME코드': '상품코드',   # 이제 중복 없이 깔끔하게 이름이 바뀝니다.
                 '낱개수량': '수량',
                 '낱개당 단가': 'UNIT단가',
                 '발주금액': 'Amount'
@@ -100,7 +102,7 @@ if file_raw:
                 df_final = df_final.sort_values(by=['배송코드', '상품코드']).reset_index(drop=True)
 
             # 화면에 결과 출력
-            st.success("✅ 엑셀 데이터 분석 및 그룹핑 완료!")
+            st.success("✅ 엑셀 데이터 분석 및 그룹핑 완료! (중복 에러 해결됨)")
             st.dataframe(df_final)
 
             # --- [Step 6] 엑셀(.xlsx) 파일 생성 및 다운로드 ---
