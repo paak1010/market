@@ -5,13 +5,12 @@ import io
 
 st.set_page_config(page_title="Tesco 납품 데이터 자동화", layout="wide")
 
-st.title("📦 Tesco 발주 데이터 자동 변환기 (단독 실행 버전)")
-st.write("다른 마스터 파일 업로드 필요 없이, **원본 데이터(ordview) 하나만 올리면** 바로 최종 엑셀을 뽑아줍니다.")
+st.title("📦 Tesco 발주 데이터 자동 변환기 (엑셀 업로드 전용)")
+st.write("발주 시스템에서 다운받은 **원본 엑셀 파일(.xlsx)** 하나만 올리면 바로 최종 정제된 엑셀을 뽑아줍니다.")
 
 # ==========================================
 # 1. 내장형 마스터 데이터 (코드 내부에 직접 정의)
 # ==========================================
-# 엑셀 파일 없이도 바코드를 ME코드로 자동 변환하도록 딕셔너리 내장
 PRODUCT_MAP = {
     8809020346592: "ME90621ADI",  # 딥클렌저 100G
     8809020346509: "ME90621AFE",  # 포밍워시 200ML
@@ -19,34 +18,33 @@ PRODUCT_MAP = {
     8809020345212: "ME00421186",  # 스프레이파이쿨 180ML
     8809020345229: "ME00421301"   # 스프레이익스트림 180ML
 }
-# (※ 나중에 새로운 상품이 추가되면 위 딕셔너리에 숫자와 ME코드만 한 줄 추가하시면 됩니다.)
 
 # ==========================================
-# 2. 메인 화면: 단일 원본 파일 업로드
+# 2. 메인 화면: 원본 엑셀 파일 업로드
 # ==========================================
-file_raw = st.file_uploader("발주 시스템에서 다운받은 원본 데이터(csv) 파일 하나만 올려주세요.", type=['csv'])
+# CSV가 아닌 xlsx, xls 만 받도록 수정
+file_raw = st.file_uploader("발주 시스템에서 다운받은 원본 엑셀 파일(.xlsx) 하나만 올려주세요.", type=['xlsx', 'xls'])
 
 if file_raw:
     try:
-        with st.spinner("데이터를 정제하고 그룹핑하는 중입니다..."):
+        with st.spinner("엑셀 데이터를 읽고 정제하는 중입니다..."):
             
-            # --- [Step 1] 원본 데이터 불러오기 ---
+            # --- [Step 1] 원본 엑셀 데이터 불러오기 ---
+            # pd.read_csv 대신 pd.read_excel 사용
             try:
-                df_raw = pd.read_csv(file_raw, skiprows=1)
+                df_raw = pd.read_excel(file_raw, skiprows=1, engine='openpyxl')
             except:
                 file_raw.seek(0)
-                df_raw = pd.read_csv(file_raw)
+                df_raw = pd.read_excel(file_raw, engine='openpyxl')
 
             # 불필요한 열 (TPND, TPNB) 제거
             cols_to_drop = [c for c in ['TPND', 'TPNB'] if c in df_raw.columns]
             if cols_to_drop:
                 df_raw = df_raw.drop(columns=cols_to_drop)
 
-            # --- [Step 2] 상품코드 매핑 (내장 데이터 활용) ---
+            # --- [Step 2] 상품코드 매핑 ---
             if '상품코드' in df_raw.columns:
-                # 바코드를 숫자로 변환 후 내장된 PRODUCT_MAP을 통해 ME코드로 변경
                 df_raw['바코드_숫자'] = pd.to_numeric(df_raw['상품코드'], errors='coerce')
-                # 매핑된 ME코드가 있으면 그걸 쓰고, 없으면 원래 바코드 값 유지
                 df_raw['ME코드'] = df_raw['바코드_숫자'].map(PRODUCT_MAP)
             else:
                 df_raw['ME코드'] = np.nan
@@ -70,7 +68,7 @@ if file_raw:
                 df_raw['배송코드'] = df_raw.apply(
                     lambda row: get_delivery_code(row['납품처'], row['입고타입']), axis=1
                 )
-                df_raw['배송코드'] = df_raw['배송코드'].fillna(81040913) # 못 찾으면 함안 디폴트 할당
+                df_raw['배송코드'] = df_raw['배송코드'].fillna(81040913)
 
             # --- [Step 4] 컬럼명 변경 및 수량 필터링 ---
             df_result = df_raw.rename(columns={
@@ -98,11 +96,11 @@ if file_raw:
                     '수량': 'sum',
                     'Amount': 'sum'
                 })
-                # 배송코드 및 상품코드 순으로 깔끔하게 정렬
+                # 정렬
                 df_final = df_final.sort_values(by=['배송코드', '상품코드']).reset_index(drop=True)
 
             # 화면에 결과 출력
-            st.success("✅ 매핑 및 그룹핑 완료! (외부 파일 연동 없이 독립 실행 성공)")
+            st.success("✅ 엑셀 데이터 분석 및 그룹핑 완료!")
             st.dataframe(df_final)
 
             # --- [Step 6] 엑셀(.xlsx) 파일 생성 및 다운로드 ---
