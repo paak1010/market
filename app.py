@@ -15,6 +15,18 @@ st.set_page_config(page_title="Tesco 납품 데이터 자동화", page_icon="�
 # 1. 사이드바 (Sidebar) - 사용 안내 및 부가 정보
 # ==========================================
 with st.sidebar:
+    # ==========================================
+# 1. 사이드바 (Sidebar) - 사용 안내 및 부가 정보
+# ==========================================
+with st.sidebar:
+    # 💡 추가하신 로고 부분 (사이드바 최상단에 배치)
+    st.image("https://static.wikia.nocookie.net/mycompanies/images/d/de/Fe328a0f-a347-42a0-bd70-254853f35374.jpg/revision/latest?cb=20191117172510", use_container_width=True)
+    
+    st.header("💡 시스템 사용 안내")
+    st.info("Tesco 주문서(CSV/Excel)를 업로드하면 수주일자와 납품일자를 자동으로 포함하여 변환합니다.")
+    st.markdown("---")
+    st.write("📌 **지원 확장자:** `.csv`, `.xls`, `.xlsx`")
+    st.write("⚠️ **주의사항:** 업로드 파일에 '상품코드', '상품명', '낱개수량'(또는 발주금액) 등의 헤더가 포함되어 있어야 정상 작동합니다.")
     st.header("💡 시스템 사용 안내")
     st.info("Tesco 주문서(CSV/Excel)를 업로드하면 수주일자와 납품일자를 자동으로 포함하여 변환합니다.")
     st.markdown("---")
