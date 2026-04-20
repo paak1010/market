@@ -12,21 +12,13 @@ from datetime import date
 st.set_page_config(page_title="Tesco 납품 데이터 자동화", page_icon="📦", layout="wide")
 
 # ==========================================
-# 1. 사이드바 (Sidebar) - 사용 안내 및 부가 정보
+# 1. 사이드바 (Sidebar) - 로고 및 사용 안내
 # ==========================================
 with st.sidebar:
-    # ==========================================
-# 1. 사이드바 (Sidebar) - 사용 안내 및 부가 정보
-# ==========================================
-with st.sidebar:
-    # 💡 추가하신 로고 부분 (사이드바 최상단에 배치)
+    # 요청하신 로고 추가
     st.image("https://static.wikia.nocookie.net/mycompanies/images/d/de/Fe328a0f-a347-42a0-bd70-254853f35374.jpg/revision/latest?cb=20191117172510", use_container_width=True)
     
-    st.header("💡 시스템 사용 안내")
-    st.info("Tesco 주문서(CSV/Excel)를 업로드하면 수주일자와 납품일자를 자동으로 포함하여 변환합니다.")
-    st.markdown("---")
-    st.write("📌 **지원 확장자:** `.csv`, `.xls`, `.xlsx`")
-    st.write("⚠️ **주의사항:** 업로드 파일에 '상품코드', '상품명', '낱개수량'(또는 발주금액) 등의 헤더가 포함되어 있어야 정상 작동합니다.")
+    st.markdown("<br>", unsafe_allow_html=True)
     st.header("💡 시스템 사용 안내")
     st.info("Tesco 주문서(CSV/Excel)를 업로드하면 수주일자와 납품일자를 자동으로 포함하여 변환합니다.")
     st.markdown("---")
@@ -217,7 +209,7 @@ if raw_file:
             df_final = df_final[['수주일자', '납품일자', '발주코드', '배송코드', '상품코드', '상품명', '수량', '단가', '금액(Amount)']]
 
             # ==========================================
-            # 4. 결과 출력 및 다운로드 (UI/UX 개선 부분)
+            # 4. 결과 출력 및 다운로드 
             # ==========================================
             st.markdown("<br>", unsafe_allow_html=True)
             st.subheader("📊 2. 변환 결과 요약")
@@ -225,7 +217,7 @@ if raw_file:
             total_amount = df_final['금액(Amount)'].sum()
             total_rows = len(df_final)
             
-            # --- [개선 포인트] 화면 분할(Columns) 및 주요 지표(Metric) 표시 ---
+            # 화면 분할(Columns) 및 주요 지표(Metric) 표시
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric(label="📦 총 처리 건수", value=f"{total_rows:,} 건")
@@ -236,23 +228,23 @@ if raw_file:
             
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- 엑셀 파일 생성 ---
+            # 엑셀 파일 생성
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_final.to_excel(writer, index=False, sheet_name='수주결과')
             
-            # 다운로드 버튼을 큼직하게 배치
+            # 다운로드 버튼
             st.download_button(
                 label="📥 날짜 포함 최종본 다운로드 (Excel)", 
                 data=output.getvalue(), 
                 file_name=f"Tesco_최종추출_{date.today().strftime('%m%d')}.xlsx", 
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True # 버튼을 꽉 차게 만들어 가시성 확보
+                use_container_width=True
             )
             
             st.success("✅ 파일 처리가 완료되었습니다. 위의 다운로드 버튼을 클릭하세요.")
 
-            # --- [개선 포인트] 접기/펴기(Expander) 메뉴로 데이터 시각적 분리 ---
+            # 접기/펴기(Expander) 메뉴
             with st.expander("👀 변환된 상세 데이터 확인하기 (클릭하여 펴기/접기)", expanded=True):
                 st.dataframe(df_final, hide_index=True, use_container_width=True)
 
