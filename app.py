@@ -6,13 +6,23 @@ import re
 import csv
 from datetime import date
 
-st.set_page_config(page_title="Tesco 납품 데이터 자동화", layout="wide")
-
-st.title("📦 Tesco 발주 데이터 자동 변환기 (날짜 완벽 추가본)")
-st.write("Tesco 주문서(CSV/Excel)를 업로드하면 수주일자와 납품일자를 자동으로 포함합니다.")
+# ==========================================
+# 페이지 기본 설정
+# ==========================================
+st.set_page_config(page_title="Tesco 납품 데이터 자동화", page_icon="📦", layout="wide")
 
 # ==========================================
-# 1. 마스터 데이터
+# 1. 사이드바 (Sidebar) - 사용 안내 및 부가 정보
+# ==========================================
+with st.sidebar:
+    st.header("💡 시스템 사용 안내")
+    st.info("Tesco 주문서(CSV/Excel)를 업로드하면 수주일자와 납품일자를 자동으로 포함하여 변환합니다.")
+    st.markdown("---")
+    st.write("📌 **지원 확장자:** `.csv`, `.xls`, `.xlsx`")
+    st.write("⚠️ **주의사항:** 업로드 파일에 '상품코드', '상품명', '낱개수량'(또는 발주금액) 등의 헤더가 포함되어 있어야 정상 작동합니다.")
+
+# ==========================================
+# 2. 마스터 데이터
 # ==========================================
 FULL_PRODUCT_MAP = {
     8809020342310: 'ME90521CLA', 8809020342211: 'ME90521CLL', 8809020342419: 'ME90521CLS',
@@ -68,13 +78,18 @@ for k, v in RAW_STORE_MAP.items():
     NORMALIZED_STORE_MAP[norm_k] = v
 
 # ==========================================
-# 2. 메인 로직
+# 3. 메인 UI 및 로직
 # ==========================================
-raw_file = st.file_uploader("발주 원본 파일을 올려주세요.", type=['xlsx', 'xls', 'csv'])
+st.title("📦 Tesco 발주 데이터 자동 변환기")
+st.write("발주 원본 데이터를 올려주시면 마스터 매핑 및 날짜 추가 작업을 자동으로 수행합니다.")
+st.markdown("---")
+
+st.subheader("📁 1. 데이터 업로드")
+raw_file = st.file_uploader("여기에 파일을 드래그하거나 클릭하여 업로드하세요.", type=['xlsx', 'xls', 'csv'])
 
 if raw_file:
     try:
-        with st.spinner("날짜 데이터를 포함하여 변환 중입니다..."):
+        with st.spinner("데이터 분석 및 날짜를 포함하여 변환 중입니다... 🔄"):
             all_rows = []
             if raw_file.name.endswith('.csv') or '.csv' in raw_file.name.lower():
                 content = raw_file.getvalue()
@@ -175,16 +190,10 @@ if raw_file:
             df_grouped = df.groupby(groupby_cols, as_index=False).agg({'수량': 'sum', '금액': 'sum'})
             df_grouped = df_grouped.sort_values(by=['납품일자', '배송코드', '상품코드']).reset_index(drop=True)
 
-            # --- 5. 최종 열 생성 (문제가 해결된 부분!) ---
+            # --- 최종 열 생성 ---
             df_final = pd.DataFrame()
-            
-            # [수정포인트 1] 데이터가 꽉 찬 열을 가장 먼저 넣어서 전체 행(줄) 갯수를 확보합니다.
             df_final['납품일자'] = pd.to_datetime(df_grouped['납품일자'], errors='coerce').dt.strftime('%Y-%m-%d')
-            
-            # [수정포인트 2] 이제 전체 행 갯수가 확정되었으니, 단일 값(수주일자)을 넣으면 모든 행에 에러 없이 똑같이 복사됩니다!
             df_final['수주일자'] = date.today().strftime('%Y-%m-%d')
-            
-            # 나머지 데이터들도 순서대로 넣습니다.
             df_final['발주코드'] = df_grouped['발주코드'].astype(int)
             df_final['배송코드'] = df_grouped['배송코드'].astype(int)
             df_final['상품코드'] = df_grouped['상품코드']
@@ -193,25 +202,47 @@ if raw_file:
             df_final['단가'] = df_grouped['단가'].astype(int)
             df_final['금액(Amount)'] = df_grouped['금액'].astype(int)
 
-            # [수정포인트 3] 마지막으로 열 순서를 가장 보기 편하게(날짜들이 맨 앞으로 오도록) 정렬합니다.
             df_final = df_final[['수주일자', '납품일자', '발주코드', '배송코드', '상품코드', '상품명', '수량', '단가', '금액(Amount)']]
 
-            # 최종 출력
+            # ==========================================
+            # 4. 결과 출력 및 다운로드 (UI/UX 개선 부분)
+            # ==========================================
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.subheader("📊 2. 변환 결과 요약")
+            
             total_amount = df_final['금액(Amount)'].sum()
-            st.success(f"✅ 처리가 완료되었습니다. (총액: {total_amount:,.0f}원)")
-            st.dataframe(df_final, hide_index=True)
+            total_rows = len(df_final)
+            
+            # --- [개선 포인트] 화면 분할(Columns) 및 주요 지표(Metric) 표시 ---
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(label="📦 총 처리 건수", value=f"{total_rows:,} 건")
+            with col2:
+                st.metric(label="💰 총 납품 금액", value=f"{total_amount:,.0f} 원")
+            with col3:
+                st.metric(label="📅 수주일자", value=date.today().strftime('%Y-%m-%d'))
+            
+            st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- 6. 엑셀 다운로드 ---
+            # --- 엑셀 파일 생성 ---
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_final.to_excel(writer, index=False, sheet_name='수주결과')
-                
+            
+            # 다운로드 버튼을 큼직하게 배치
             st.download_button(
                 label="📥 날짜 포함 최종본 다운로드 (Excel)", 
                 data=output.getvalue(), 
                 file_name=f"Tesco_최종추출_{date.today().strftime('%m%d')}.xlsx", 
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True # 버튼을 꽉 차게 만들어 가시성 확보
             )
+            
+            st.success("✅ 파일 처리가 완료되었습니다. 위의 다운로드 버튼을 클릭하세요.")
+
+            # --- [개선 포인트] 접기/펴기(Expander) 메뉴로 데이터 시각적 분리 ---
+            with st.expander("👀 변환된 상세 데이터 확인하기 (클릭하여 펴기/접기)", expanded=True):
+                st.dataframe(df_final, hide_index=True, use_container_width=True)
 
     except Exception as e:
         st.error(f"오류 발생: {e}")
